@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trap Level - No Confíes en Nadie</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #222;
+            color: white;
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            border: 4px solid #000;
+            background-color: #fca728; /* El fondo naranja de la imagen */
+            image-rendering: pixelated;
+        }
+        #text {
+            margin-top: 10px;
+            font-size: 18px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="text">Muertes: <span id="deaths">0</span> | Nivel: <span id="level">1</span></div>
+    <canvas id="gameCanvas" width="600" height="300"></canvas>
+    <div id="text" style="font-size: 14px; color: #888;">Controles: Flechas o WASD / Espacio para saltar.</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+// Configuración de físicas simples
+const GRAVITY = 0.4;
+let deathCount = 0;
+let currentLevel = 1;
+
+let player = {
+    x: 80,
+    y: 160,
+    width: 14,
+    height: 28,
+    vx: 0,
+    vy: 0,
+    isGrounded: false,
+    color: "#000000" // El personaje negro de la imagen
+};
+
+// Suelo base (marrón como en image_a35acd.png)
+const GROUND_Y = 200;
+
+// Variables de trampas que cambian por nivel
+let traps = [];
+let platforms = [];
+let door = { x: 480, y: 150, w: 32, h: 50, vx: 0 };
+let triggerActivated = false;
+let trigger2Activated = false;
+
+function initLevel(lvl) {
+    player.x = 80;
+    player.y = 160;
+    player.vx = 0;
+    player.vy = 0;
+    triggerActivated = false;
+    trigger2Activated = false;
+    
+    if (lvl === 1) {
+        // NIVEL 1: Los pinchos clásicos de la imagen... pero se mueven hacia ti
+        door.x = 480;
+        door.y = 150;
+        door.vx = 0;
+        
+        platforms = [
+            { x: 0, y: GROUND_Y, w: 600, h: 100, type: "normal" }
+        ];
+        
+        traps = [
+            // Los 3 pinchos del medio de la imagen
+            { x: 260, y: GROUND_Y - 15, w: 12, h: 15, type: "spike_troll" },
+            { x: 272, y: GROUND_Y - 15, w: 12, h: 15, type: "spike_troll" },
+            { x: 284, y: GROUND_Y - 15, w: 12, h: 15, type: "spike_troll" },
+            // Bloque trampa invisible en el techo que te cae encima si saltas muy alto al principio
+            { x: 180, y: -40, w: 30, h: 30, type: "ceiling_drop", vy: 0, active: false }
+        ];
+    } 
+    else if (lvl === 2) {
+        // NIVEL 2: El suelo falso se cae y la puerta huye
+        door.x = 480;
+        door.y = 150;
+        door.vx = 0;
+
+        platforms = [
+            { x: 0, y: GROUND_Y, w: 220, h: 100, type: "normal" },
+            { x: 220, y: GROUND_Y, w: 140, h: 100, type: "fake_fall", vy: 0, fallen: false }, // Se cae al pisarlo
+            { x: 360, y: GROUND_Y, w: 240, h: 100, type: "normal" }
+        ];
+
+        traps = [
+            { x: 250, y: 280, w: 80, h: 20, type: "pit_spikes" }, // Pinchos ocultos abajo del suelo que cae
+            { x: 420, y: GROUND_Y - 15, w: 15, h: 15, type: "normal_spike" }
+        ];
+    }
+    else if (lvl === 3) {
+        // NIVEL 3: La puerta te ataca
+        door.x = 480;
+        door.y = 150;
+        door.vx = 0;
+
+        platforms = [
+            { x: 0, y: GROUND_Y, w: 600, h: 100, type: "normal" }
+        ];
+
+        traps = [
+            { x: 200, y: GROUND_Y - 15, w: 15, h: 15, type: "normal_spike" },
+            { x: 340, y: GROUND_Y - 15, w: 15, h: 15, type: "normal_spike" }
+        ];
+    }
+}
+
+// Teclado
+const keys = {};
+window.addEventListener("keydown", e => keys[e.code] = true);
+window.addEventListener("keyup", e => keys[e.code] = false);
+
+function resetPlayer() {
+    deathCount++;
+    document.getElementById("deaths").innerText = deathCount;
+    initLevel(currentLevel);
+}
+
+function update() {
+    // Movimiento básico
+    if (keys["ArrowRight"] || keys["KeyD"]) player.vx = 2.5;
+    else if (keys["ArrowLeft"] || keys["KeyA"]) player.vx = -2.5;
+    else player.vx = 0;
+
+    if ((keys["ArrowUp"] || keys["KeyW"] || keys["Space"]) && player.isGrounded) {
+        player.vy = -7.5;
+        player.isGrounded = false;
+    }
+
+    // Aplicar gravedad
+    player.vy += GRAVITY;
+    player.x += player.vx;
+    player.y += player.vy;
+
+    // Límites de caída mortal
+    if (player.y > canvas.height) {
+        resetPlayer();
+        return;
+    }
+
+    // --- LÓGICA DE TRAMPAS POR NIVEL ---
+    
+    if (currentLevel === 1) {
+        // TROLEO 1: Si te acercas a los pinchos del centro, ¡salen disparados hacia la izquierda a por ti!
+        traps.forEach(t => {
+            if (t.type === "spike_troll" && player.x > 170) {
+                t.x -= 2.5; 
+            }
+            // TROLEO 2: Bloque sorpresa del techo si intentas saltar los pinchos desde lejos
+            if (t.type === "ceiling_drop") {
+                if (player.x > 140 && !t.active) { t.active = true; }
+                if (t.active) {
+                    t.vy += 0.5;
+                    t.y += t.vy;
+                }
+            }
+        });
+    }
+    
+    if (currentLevel === 2) {
+        // TROLEO 3: El suelo del medio se cae cuando estás justo encima
+        platforms.forEach(p => {
+            if (p.type === "fake_fall") {
+                if (player.x > p.x && player.x < p.x + p.w && player.y + player.height >= p.y - 2) {
+                    triggerActivated = true;
+                }
+                if (triggerActivated) {
+                    p.vy += 0.3;
+                    p.y += p.vy;
+                }
+            }
+        });
+
+        // TROLEO 4: Cuando saltas el último pincho, la puerta se mueve hacia atrás para que te caigas
+        if (player.x > 400) {
+            door.x += 1.5;
+            if(door.x > 550) door.x = 550;
+        }
+    }
+
+    if (currentLevel === 3) {
+        // TROLEO 5: Cuando estás cerca de la puerta final, ¡le salen pinchos y vuela hacia ti para aplastarte!
+        if (player.x > 380) {
+            triggerActivated = true;
+        }
+        if (triggerActivated) {
+            door.vx -= 0.4;
+            door.x += door.vx;
+        }
+    }
+
+    // --- COLISIONES CON PLATAFORMAS ---
+    player.isGrounded = false;
+    platforms.forEach(p => {
+        // Colisión vertical superior (pisar)
+        if (player.x + player.width > p.x && player.x < p.x + p.w &&
+            player.y + player.height >= p.y && player.y + player.height <= p.y + 10 && player.vy >= 0) {
+            player.y = p.y - player.height;
+            player.vy = 0;
+            player.isGrounded = true;
+        }
+    });
+
+    // --- COLISIONES CON TRAMPAS (MUERTE) ---
+    traps.forEach(t => {
+        if (player.x + player.width > t.x && player.x < t.x + t.w &&
+            player.y + player.height > t.y && player.y < t.y + t.h) {
+            resetPlayer();
+        }
+    });
+
+    // Si la puerta del nivel 3 te embiste, mueres
+    if (currentLevel === 3 && triggerActivated) {
+        if (player.x + player.width > door.x && player.x < door.x + door.w &&
+            player.y + player.height > door.y && player.y < door.y + door.h) {
+            resetPlayer();
+        }
+    }
+
+    // --- CONDICIÓN DE VICTORIA DE NIVEL (Llegar a la puerta) ---
+    // En nivel 3 solo ganas si logras saltar por encima de la puerta loca y tocar su parte trasera
+    if (currentLevel !== 3 || (currentLevel === 3 && door.vx < -4)) {
+        if (player.x + player.width > door.x && player.x < door.x + door.w &&
+            player.y + player.height > door.y && player.y < door.y + door.h) {
+            currentLevel++;
+            if(currentLevel > 3) {
+                alert("¡Felicidades! Completaste el juego sin romper el teclado.");
+                currentLevel = 1;
+                deathCount = 0;
+            }
+            document.getElementById("level").innerText = currentLevel;
+            initLevel(currentLevel);
+        }
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1. Dibujar plataformas (Suelo marrón oscuro)
+    ctx.fillStyle = "#b85d18";
+    platforms.forEach(p => {
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+    });
+
+    // 2. Dibujar Trampas / Pinchos
+    traps.forEach(t => {
+        ctx.fillStyle = "#8b4513"; // Pinchos marrones como el suelo
+        if (t.type.includes("spike")) {
+            // Dibujar triángulo estilo pixelart
+            ctx.beginPath();
+            ctx.moveTo(t.x, t.y + t.h);
+            ctx.lineTo(t.x + t.w / 2, t.y);
+            ctx.lineTo(t.x + t.w, t.y + t.h);
+            ctx.fill();
+        } else {
+            // Bloques trampa del techo
+            ctx.fillStyle = "#555";
+            ctx.fillRect(t.x, t.y, t.w, t.h);
+        }
+    });
+
+    // 3. Dibujar la Puerta (Gris con borde marrón como image_a35acd.png)
+    ctx.fillStyle = "#b85d18";
+    ctx.fillRect(door.x, door.y, door.w, door.h);
+    ctx.fillStyle = "#d3d3d3";
+    ctx.fillRect(door.x + 3, door.y + 3, door.w - 6, door.h - 3);
+    
+    // Si la puerta se vuelve hostil en el nivel 3, le ponemos ojos de enfado
+    if (currentLevel === 3 && triggerActivated) {
+        ctx.fillStyle = "#red";
+        ctx.fillRect(door.x + 6, door.y + 15, 4, 4);
+        ctx.fillRect(door.x + 18, door.y + 15, 4, 4);
+    }
+
+    // 4. Dibujar Jugador (Monigote negro)
+    ctx.fillStyle = player.color;
+    ctx.fillRect(player.x, player.y, player.width, player.height);
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+// Empezar el juego
+initLevel(1);
+loop();
+</script>
+</body>
+</html>
